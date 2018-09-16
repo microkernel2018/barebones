@@ -1,3 +1,4 @@
 *~
 *.o
 myos.bin
+myos.elf
