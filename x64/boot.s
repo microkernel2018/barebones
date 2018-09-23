@@ -1,126 +1,204 @@
-/* Declare constants for the multiboot header. */
-.set ALIGN,    1<<0             /* align loaded modules on page boundaries */
-.set MEMINFO,  1<<1             /* provide memory map */
-.set FLAGS,    ALIGN | MEMINFO  /* this is the Multiboot 'flag' field */
-.set MAGIC,    0x1BADB002       /* 'magic number' lets bootloader find the header */
-.set CHECKSUM, -(MAGIC + FLAGS) /* checksum of above, to prove we are multiboot */
- 
-/* 
-Declare a multiboot header that marks the program as a kernel. These are magic
-values that are documented in the multiboot standard. The bootloader will
-search for this signature in the first 8 KiB of the kernel file, aligned at a
-32-bit boundary. The signature is in its own section so the header can be
-forced to be within the first 8 KiB of the kernel file.
-*/
-.section .multiboot
-.align 4
-.long MAGIC
-.long FLAGS
-.long CHECKSUM
- 
-/*
-The multiboot standard does not define the value of the stack pointer register
-(esp) and it is up to the kernel to provide a stack. This allocates room for a
-small stack by creating a symbol at the bottom of it, then allocating 16384
-bytes for it, and finally creating a symbol at the top. The stack grows
-downwards on x86. The stack is in its own section so it can be marked nobits,
-which means the kernel file is smaller because it does not contain an
-uninitialized stack. The stack on x86 must be 16-byte aligned according to the
-System V ABI standard and de-facto extensions. The compiler will assume the
-stack is properly aligned and failure to align the stack will result in
-undefined behavior.
-*/
-.section .bss
-.align 16
-stack_bottom:
-.skip 16384 # 16 KiB
-stack_top:
- 
-/*
-The linker script specifies _start as the entry point to the kernel and the
-bootloader will jump to this position once the kernel has been loaded. It
-doesn't make sense to return from this function as the bootloader is gone.
-*/
+/*******************************************************************************
+
+    Copyright(C) Jonas 'Sortie' Termansen 2011, 2014.
+
+    This file is part of Sortix.
+
+    Sortix is free software: you can redistribute it and/or modify it under the
+    terms of the GNU General Public License as published by the Free Software
+    Foundation, either version 3 of the License, or (at your option) any later
+    version.
+
+    Sortix is distributed in the hope that it will be useful, but WITHOUT ANY
+    WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+    FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
+    details.
+
+    You should have received a copy of the GNU General Public License along with
+    Sortix. If not, see <http://www.gnu.org/licenses/>.
+
+    x64/boot.S
+    Bootstraps the kernel and passes over control from the boot-loader to the
+    kernel main function. It also jumps into long mode!
+
+*******************************************************************************/
+
 .section .text
+.text 0x100000
+
 .global _start
+.global __start
 .type _start, @function
+.type __start, @function
+.code32
 _start:
-	mov $stack_top, %esp
+__start:
+	jmp prepare_kernel_execution
 
-// https://wiki.osdev.org/Setting_Up_Long_Mode
+	# Align 32 bits boundary.
+	.align 4
 
-	/////////////////
-	// disable paging
-	
-	// Set the A-register to control register 0.
-	mov %cr0,%eax
-	// Clear the PG-bit, which is bit 31.
-	and $0b01111111111111111111111111111111,%eax
-	// Set control register 0 to the A-register.
-	mov %eax,%cr0
+	# Multiboot header.
+multiboot_header:
+	# Magic.
+	.long 0x1BADB002
+	# Flags.
+	.long 0x00000003
+	# Checksum.
+	.long -(0x1BADB002 + 0x00000003)
 
-	///////////////////////
-	// set up paging
-	// XXXX
+prepare_kernel_execution:
+	# We got our multiboot information in various registers. But we are going
+	# to need these registers. But where can we store them then? Oh hey, let's
+	# store then in the code already run!
 
-	///////////////////////
-	// switch from protected mode to long mode
+	# Store the pointer to the Multiboot information structure.
+	mov %ebx, 0x100000
 
-	// Set the C-register to 0xC0000080, which is the EFER MSR.
-	mov $0xC0000080,%ecx
-	// Read from the model-specific register.
+	# Store the magic value.
+	mov %eax, 0x100004
+
+	# Clear the first $0xE000 bytes following 0x21000.
+	movl $0x21000, %edi
+	mov %edi, %cr3
+	xorl %eax, %eax
+	movl $0xE000, %ecx
+	rep stosl
+	movl %cr3, %edi
+
+	# Set the initial page tables.
+	# Note that we OR with 0x7 here to allow user-space access, except in the
+	# first 2 MiB. We also do this with 0x200 to allow forking the page.
+
+	# Page-Map Level 4
+	movl $0x22207, (%edi)
+	addl $0x1000, %edi
+
+	# Page-Directory Pointer Table
+	movl $0x23207, (%edi)
+	addl $0x1000, %edi
+
+	# Page-Directory (no user-space access here)
+	movl $0x24003, (%edi) # (First 2 MiB)
+	movl $0x25003, 8(%edi) # (Second 2 MiB)
+	addl $0x1000, %edi
+
+	# Page-Table
+	# Memory map the first 4 MiB.
+	movl $0x3, %ebx
+	movl $1024, %ecx
+
+SetEntry:
+	mov %ebx, (%edi)
+	add $0x1000, %ebx
+	add $8, %edi
+	loop SetEntry
+
+	# Enable PAE.
+	mov %cr4, %eax
+	orl $0x20, %eax
+	mov %eax, %cr4
+
+	# Enable long mode.
+	mov $0xC0000080, %ecx
 	rdmsr
-	// Set the LM-bit which is the 9th bit (bit 8).
-	or $0b10000000, %eax
-	// Write to the model-specific register
+	orl $0x100, %eax
 	wrmsr
 
-	//////////////////////
-	// enable paging
-	mov %cr0,%eax
-	or $0b1000000000000000000000000000000,%eax
-	mov %eax,%cr0
+	# Enable paging and enter long mode (still 32-bit)
+	mov %cr0, %eax
+	orl $0x80000000, %eax
+	mov %eax, %cr0
 
-	/////////////////////
-	// enter the 64 bit submode by setting up a GDT
-	// XXX NOT DONE
+	# Load the long mode GDT.
+	mov GDTPointer, %eax
+	lgdtl GDTPointer
 
-//	lgdt []
-	jmp realm64 // we should do the 64 bit setup in the Sample before calling kernel_main
-realm64:	
-	
+	# Now use the 64-bit code segment, and we are in full 64-bit mode.
+	ljmp $0x10, $Realm64
+
+.code64
+Realm64:
+
+	# Now, set up the other segment registers.
 	cli
-1:	hlt
-	jmp 1b
+	mov $0x18, %ax
+	mov %ax, %ds
+	mov %ax, %es
+	mov %ax, %fs
+	mov %ax, %gs
 
-GDT64:                              // Global Descriptor Table (64-bit).
-    .size GDT64.Null, . - GDT64     // The null descriptor.
-    .word 0xFFFF                    // Limit (low).
-    .word 0                         // Base (low).
-    .byte 0                         // Base (middle)
-    .byte 0                         // Access.
-    .byte 1                         // Granularity.
-    .byte 0                         // Base (high).
-    .size GDT64.Code, . - GDT64     // The code descriptor.
-    .word 0                         // Limit (low).
-    .word 0                         // Base (low).
-    .byte 0                         // Base (middle)
-    .byte 0b10011010                // Access (exec/read).
-    .byte 0b10101111                // Granularity, 64 bits flag, limit19:16.
-    .byte 0                         // Base (high).
-    .size GDT64.Data, . - GDT64     // The data descriptor.
-    .word 0                         // Limit (low).
-    .word 0                         // Base (low).
-    .byte 0                         // Base (middle)
-    .byte 0b10010010                // Access (read/write).
-    .byte 0b00000000                // Granularity.
-    .byte 0                         // Base (high).
-    GDT64.Pointer:                  // The GDT-pointer.
-    .word . - GDT64 - 1             // Limit.
-    .quad GDT64                     // Base.
+	# Enable the floating point unit.
+	mov %cr0, %rax
+	and $0xFFFD, %ax
+	or $0x10, %ax
+	mov %rax, %cr0
+	fninit
 
-/*
-Set the size of the _start symbol to the current location '.' minus its start.
-This is useful when debugging or when you implement call tracing.
-*/
+	# Enable Streaming SIMD Extensions.
+	mov %cr0, %rax
+	and $0xFFFB, %ax
+	or $0x2, %ax
+	mov %rax, %cr0
+	mov %cr4, %rax
+	or $0x600, %rax
+	mov %rax, %cr4
+
+	# Store a copy of the initialial floating point registers.
+	//fxsave fpu_initialized_regs
+
+	# Alright, that was the bootstrap code. Now begin preparing to run the
+	# actual 64-bit kernel.
+	jmp Main
 .size _start, . - _start
+.size __start, . - __start
+
+.section .data
+GDT64:                           # Global Descriptor Table (64-bit).
+	GDTNull:                       # The null descriptor.
+	.word 0                         # Limit (low).
+	.word 0                         # Base (low).
+	.byte 0                         # Base (middle)
+	.byte 0                         # Access.
+	.byte 0                         # Granularity.
+	.byte 0                         # Base (high).
+	GDTUnused:                       # The null descriptor.
+	.word 0                         # Limit (low).
+	.word 0                         # Base (low).
+	.byte 0                         # Base (middle)
+	.byte 0                         # Access.
+	.byte 0                         # Granularity.
+	.byte 0                         # Base (high).
+	GDTCode:                       # The code descriptor.
+	.word 0xFFFF                    # Limit (low).
+	.word 0                         # Base (low).
+	.byte 0                         # Base (middle)
+	.byte 0x9A                      # Access.
+	.byte 0xAF                      # Granularity.
+	.byte 0                         # Base (high).
+	GDTData:                       # The data descriptor.
+	.word 0xFFFF                    # Limit (low).
+	.word 0                         # Base (low).
+	.byte 0                         # Base (middle)
+	.byte 0x92                      # Access.
+	.byte 0x8F                      # Granularity.
+	.byte 0                         # Base (high).
+	GDTPointer:                    # The GDT-pointer.
+	.word GDTPointer - GDT64 - 1     # Limit.
+	.long GDT64                      # Base.
+	.long 0
+
+Main:
+	# Copy the character B onto the screen so we know it works.
+	movq $0x242, %r15
+	movq %r15, %rax
+	movw %ax, 0xB8000
+
+	# Load the pointer to the Multiboot information structure.
+	mov 0x100000, %ebx
+
+	# Load the magic value.
+	mov 0x100004, %eax
+
+	jmp kernel_main
+.size Main, . - Main
