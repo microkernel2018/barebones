@@ -71,27 +71,54 @@ _start:
 	// Read from the model-specific register.
 	rdmsr
 	// Set the LM-bit which is the 9th bit (bit 8).
-	or 1<<8, %eax
+	or $0b10000000, %eax
 	// Write to the model-specific register
 	wrmsr
 
 	//////////////////////
 	// enable paging
 	mov %cr0,%eax
-	or 1<<31,%eax
+	or $0b1000000000000000000000000000000,%eax
 	mov %eax,%cr0
 
 	/////////////////////
 	// enter the 64 bit submode by setting up a GDT
 	// XXX NOT DONE
 
-	lgdt []
+//	lgdt []
 	jmp realm64 // we should do the 64 bit setup in the Sample before calling kernel_main
+realm64:	
 	
 	cli
 1:	hlt
 	jmp 1b
- 
+
+GDT64:                              // Global Descriptor Table (64-bit).
+    .size GDT64.Null, . - GDT64           // The null descriptor.
+    .word $0xFFFF                    // Limit (low).
+    .word $0                         // Base (low).
+    .byte $0                         // Base (middle)
+    .byte $0                         // Access.
+    .byte $1                         // Granularity.
+    .byte $0                         // Base (high).
+    .size GDT64.Code, . - GDT64           // The code descriptor.
+    .word $0                         // Limit (low).
+    .word $0                         // Base (low).
+    .byte $0                         // Base (middle)
+    .byte $0b10011010                 // Access (exec/read).
+    .byte $0b10101111                 // Granularity, 64 bits flag, limit19:16.
+    .byte $0                         // Base (high).
+    .size GDT64.Data, . - GDT64           // The data descriptor.
+    .word $0                         // Limit (low).
+    .word $0                         // Base (low).
+    .byte $0                         // Base (middle)
+    .byte $0b10010010                 // Access (read/write).
+    .byte $0b00000000                 // Granularity.
+    .byte $0                         // Base (high).
+    GDT64.Pointer:                  // The GDT-pointer.
+    .word . - GDT64 - 1             // Limit.
+    .quad GDT64                     // Base.
+
 /*
 Set the size of the _start symbol to the current location '.' minus its start.
 This is useful when debugging or when you implement call tracing.
