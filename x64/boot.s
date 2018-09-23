@@ -200,5 +200,5 @@ Main:
 	# Load the magic value.
 	mov 0x100004, %eax
 
-	jmp kernel_main
+	jmp beginkernel
 .size Main, . - Main
