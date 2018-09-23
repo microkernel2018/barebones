@@ -94,27 +94,27 @@ realm64:
 	jmp 1b
 
 GDT64:                              // Global Descriptor Table (64-bit).
-    .size GDT64.Null, . - GDT64           // The null descriptor.
-    .word $0xFFFF                    // Limit (low).
-    .word $0                         // Base (low).
-    .byte $0                         // Base (middle)
-    .byte $0                         // Access.
-    .byte $1                         // Granularity.
-    .byte $0                         // Base (high).
-    .size GDT64.Code, . - GDT64           // The code descriptor.
-    .word $0                         // Limit (low).
-    .word $0                         // Base (low).
-    .byte $0                         // Base (middle)
-    .byte $0b10011010                 // Access (exec/read).
-    .byte $0b10101111                 // Granularity, 64 bits flag, limit19:16.
-    .byte $0                         // Base (high).
-    .size GDT64.Data, . - GDT64           // The data descriptor.
-    .word $0                         // Limit (low).
-    .word $0                         // Base (low).
-    .byte $0                         // Base (middle)
-    .byte $0b10010010                 // Access (read/write).
-    .byte $0b00000000                 // Granularity.
-    .byte $0                         // Base (high).
+    .size GDT64.Null, . - GDT64     // The null descriptor.
+    .word 0xFFFF                    // Limit (low).
+    .word 0                         // Base (low).
+    .byte 0                         // Base (middle)
+    .byte 0                         // Access.
+    .byte 1                         // Granularity.
+    .byte 0                         // Base (high).
+    .size GDT64.Code, . - GDT64     // The code descriptor.
+    .word 0                         // Limit (low).
+    .word 0                         // Base (low).
+    .byte 0                         // Base (middle)
+    .byte 0b10011010                // Access (exec/read).
+    .byte 0b10101111                // Granularity, 64 bits flag, limit19:16.
+    .byte 0                         // Base (high).
+    .size GDT64.Data, . - GDT64     // The data descriptor.
+    .word 0                         // Limit (low).
+    .word 0                         // Base (low).
+    .byte 0                         // Base (middle)
+    .byte 0b10010010                // Access (read/write).
+    .byte 0b00000000                // Granularity.
+    .byte 0                         // Base (high).
     GDT64.Pointer:                  // The GDT-pointer.
     .word . - GDT64 - 1             // Limit.
     .quad GDT64                     // Base.
